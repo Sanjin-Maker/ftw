@@ -1707,6 +1707,12 @@ func (c *Config) Validate() error {
 	if len(c.Drivers) > 0 && siteMeters == 0 {
 		return errors.New("at least one driver must be is_site_meter: true")
 	}
+	// SiteMeterDriver() returns the first match, so a second is_site_meter
+	// entry was silently ignored — the operator thinks meter B is the site
+	// boundary while dispatch trusts meter A. Make the ambiguity an error.
+	if siteMeters > 1 {
+		return fmt.Errorf("exactly one driver may set is_site_meter: true (found %d)", siteMeters)
+	}
 
 	switch c.Site.Profile {
 	case "", "residential", "commercial":
@@ -1757,6 +1763,14 @@ func (c *Config) Validate() error {
 	}
 	if c.Fuse.Phases <= 0 {
 		return errors.New("fuse.phases must be > 0")
+	}
+	// The phase-current safety model ([3]float64 arrays, meter_l1..l3_a
+	// metrics) covers 1..3 conductors. A larger value used to be silently
+	// truncated to 3 by the dispatch freshness gate, which understates
+	// MaxPowerW-based limits derived here while the operator believes the
+	// extra phases are accounted for. Reject it instead.
+	if c.Fuse.Phases > 3 {
+		return errors.New("fuse.phases must be 1, 2 or 3")
 	}
 	if c.Fuse.Voltage <= 0 {
 		return errors.New("fuse.voltage must be > 0")
