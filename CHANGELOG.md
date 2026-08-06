@@ -1,5 +1,90 @@
 # Changelog
 
+## 2.0.0
+
+### Major Changes
+
+- 3de15a0: Home Link is removed. Remote access is the FTW app.
+
+  **What you lose.** Every passkey enrolled with Home Link stops working, and
+  there is no migration: the box is no longer a WebAuthn relying party, so those
+  credentials now verify against nothing. The browser route is gone with them —
+  your `<name>.home.sourceful.energy` address, the page it served and the relay
+  behind it no longer exist. The local UI's Remote tab and the
+  `/api/home-link/*` endpoints are gone. If you were reading your house from a
+  browser away from home, that stops working on this release and the app is the
+  only way back.
+
+  **What you get.** One remote path instead of two. The app pairs by scanning the
+  box's QR code, which carries the box's key optically so no server ever sees it,
+  and afterwards reconnects on its own key — a photographed code cannot pair a
+  second phone. The relay holds no keys and cannot read a frame, and the name the
+  box joins under changes every hour, so the relay operator cannot tell which
+  household is online or follow one across the day. Nothing about local control,
+  setup, history or fallback planning changes.
+
+  **What is not there yet.** The box mints its pairing code at boot but nothing
+  renders it in the local UI, so pairing a phone still needs the terminal.
+  Revoking one phone means rotating the rendezvous secret, which re-pairs the
+  whole household; per-device revocation is owed.
+
+  An existing `home_link:` block in your `config.yaml` is ignored — the box boots
+  without you editing anything. Home Link's rows in `state.db` are left where
+  they are and authorise nothing. `ftw home-link-adopt` is now
+  `ftw gateway-identity-adopt`; it does the same thing to the same files, and the
+  machine identity it binds is untouched by any of this.
+
+### Minor Changes
+
+- 8c84981: The box now counts itself. Once a day it tells Sourceful its FTW version and channel, which driver types it runs, roughly how much battery it has, its price zone and roughly how old the install is — enough to answer "of the boxes on beta, how many run sungrow", which is what decides where engineering effort goes.
+
+  The ping carries no gateway ID, no key, no serial, no site name, no counter and no timestamp: nothing in the message says which box sent it. Values are bucketed rather than reported, the version travels only when it is a release tag, so a developer's build reports as unknown rather than as itself, and the send time is drawn fresh each day rather than sitting in one slot. It goes straight to Sourceful over HTTPS, never through the relay, and a failed send is forgotten rather than retried.
+
+  Driver names have their own rule, because a driver file is called whatever the thing that installed it called it, and anyone can install their own. A name travels only if it is on one of two lists, and neither list is the contents of a directory on the box. One is the drivers this build ships with, compiled into the binary from the bundled-driver pin rather than found on disk, so every box on a release carries the same list and nothing a running box does adds to it. The other is the box's own record of the install, asked file by file: did this exact filename arrive under a signature made with FTW's own key? Everything else reports as "other": a driver somebody wrote, a file copied into place, a file renamed afterwards, one from any repository but FTW's however carefully it signs its own manifests, and — until it is installed again — one that was already on the box before this release started keeping the record. Settings can say where installed drivers are kept, including inside the directory the bundled ones sit in, and it changes nothing: a directory can take a name off the second list, never put one on it. The one way through is editing the box's own database by hand, which this does not claim to stop.
+
+  Two limits are stated rather than glossed over, in the package doc and on the screen. The six fields still describe a household, so a beta box in a small price zone with a big battery may be the only one of its kind; and Sourceful sees the address the box sends from, as any website does. The payload is what this design makes useless as an identifier, not the connection. Settings → Fleet ping shows the exact message this box would send, built by the same call that sends it, so the claim is checkable instead of promised; while the ping is switched off that screen says nothing is being sent. On by default; the switch takes effect without a restart.
+
+- 3de15a0: Pair a phone from Settings → FTW app.
+
+  The box could mint an enrollment payload but nothing showed it, so there was no
+  way to pair a phone at all. There is now a button that mints a single-use code
+  and draws it as a QR, and a local-only endpoint behind it.
+
+  The code is minted on request rather than shown continuously: a QR left on a
+  screen for a week is a QR that everyone who walked past has photographed. It is
+  never offered as copyable text either — the payload carries the pairing code and
+  the rendezvous secret, so the camera is the only path it should take.
+
+- 3de15a0: The box now speaks the FTW app's protocol for real. It mints its own Noise static key, a long-lived rendezvous secret and single-use pairing codes, prints them as the QR payload the app parses, and holds an outbound connection to the blind relay under a handle that changes every hour — derived from the secret, so the relay cannot follow a household from one epoch to the next. Up to four phones share the uplink; each gets its own encrypted session, and the box tells them apart by which one's key authenticates a frame, because the relay cannot say. A phone is let in by a pairing code once and by its own key thereafter, so reconnecting never needs a new code and a photographed code cannot pair a second device.
+
+  Turn it on with `app_link.enabled: true`.
+
+  `controlRev` now means something: it is a fingerprint of the site's controllable state, so it moves when the mode or a target does and holds still through the per-tick churn. A command that expected an older revision is refused, and a session that falls behind is resynced with a fresh snapshot rather than left refusing every command until it reconnects. Site mode changes from every door now go through one function, so none can arrive having set the mode without dropping the manual hold and resetting the PI integrator.
+
+### Patch Changes
+
+- da6a101: Paired phones can be seen and removed. Settings → The FTW app now lists every paired device — a short key prefix with paired/last-seen stamps, most recently seen first — with a Remove that takes effect immediately: the key is forgotten and any live session is terminated with the reason the app already knows how to show. The stored device list gains timestamps; the old bare-key file still reads, so an update never unpairs a house. The count endpoint's "never a list" stance is deliberately reversed: this page can already mint a pairing code, the strictly stronger power, and without a list there was no way to lock a stray key out at all.
+- 41324a5: The FTW app gets history, and the plan no longer kills the session. History tiles are served from the energy ledger over the app protocol — same tile geometry, ids and etags as the app computes, so unchanged tiles are never resent; mean power per bucket, MISSING where nothing was metered, retention gaps named instead of served as silence. The plan answer is truncated to the slots that fit the largest bulk bucket: the optimizer's 193 slots encode past 16 kB, and the encode error used to drop the whole session — which the app experienced as the box hanging up whenever the plan view opened.
+- 450b2b5: The FTW app can be turned on from Settings instead of by hand-editing YAML. The app tab now carries a checkbox, and saving it raises the restart dialog the box already shows for settings that only take effect at startup. Because the uplink is connected at startup, what is saved and what is running can differ for a minute, and the tab says which of the two it is in rather than going quiet: the pairing button stays disabled until the box reports the uplink actually running, so nobody presses it and gets nothing back.
+- 71b2be4: The FTW app can draw electricity prices. The box answers `price.get` over the app protocol with the slots covering a window, spot and total as whole minor units per kWh — rounded once, here, so the app and the box's own dashboard cannot end up disagreeing about what 18.7 öre is. `price.spot` is advertised only when a zone is configured and rows are stored, so a house with no price feed gets no empty chart instead of a broken one.
+
+  An answer that does not cover the window asked for says so, at either edge or in the middle. Tomorrow's rates publish in the afternoon, a failed midday fetch leaves a hole, and a box that first heard from the market at breakfast holds nothing for the hours before it; all three come back marked stale rather than as a market that went quiet. A window is read eight days at a time — the price table is never pruned and the app derives its window from the phone's clock, so a wrong clock used to mean a query over every row the box had ever stored.
+
+- 9d170ac: The box can now speak the FTW web app's client protocol. A new `appproto` package handles the handshake, the telemetry stream, commands and the dispatch plan: version negotiation degrades an old app to a frozen field subset instead of refusing it, telemetry rides a fixed-size lane that sends a tick even when nothing changed, source freshness travels in deltas so a device that goes quiet mid-session is visible immediately, and commands are separated into a receipt from the dispatcher and a result read back from the driver. Shared names — field ids, capabilities, scopes and error codes — are generated from `contract/registry.yaml` rather than typed out, and a test fails when the two drift. Nothing is wired into the running process yet; this is the protocol layer on its own.
+- dcfc1c8: The box can now speak the app's wire: frame codec, Noise IK responder and encrypted transport, in `go/internal/appwire`. Telemetry frames are padded to a fixed bucket and refuse to grow, so a 1 Hz stream does not leak the household's load pattern through its length. Unknown message types and unknown map keys are ignored in both directions, so an app pinned in a service worker degrades instead of showing a white screen. Verified against the official Noise test vector and against bytes generated by the app itself.
+- 836880d: EV charging is on the app wire. Field 10, `ev_w`, carries the summed charger draw — frozen in meaning like fields 1–9, conditional in presence like battery_soc: a site without a charger sends nothing and the app draws no EV node rather than a dead one. Charger drivers now also appear in the app's source table, so their freshness is visible. The energy-flow component gains a `static` attribute that holds every animation still — the FTW app sets it while showing a cached snapshot, because a moving particle is a claim that power is flowing right now.
+- 71b2be4: The price chart can now be handed its data instead of fetching it. A `fed` attribute turns off both the request to /api/prices and the five-minute poll behind it, and `setPrices()` pushes a window in. The FTW app draws this same chart over its encrypted session to the box and has no HTTP origin to fetch from, so without this it would have to keep a fork — and a forked chart is one that stops matching the box's own.
+
+  A slot fed with its own total is shown as sent rather than recomputed from the box's tariff and VAT, since the caller may hold different ones, and the subtitle says "total to import" rather than naming parts it cannot see. The dashboard is unchanged: without the attribute the component fetches, polls and labels exactly as before.
+
+- 55d7f37: A mode change from the app is confirmed as soon as it is applied. The forced replan runs off the command path: the Python optimizer can take longer than the app waits for a result, so a change that had already been applied and read back was reported "unconfirmed" purely because the planner was slow. The replan keeps running under a context that survives the session, so a phone dropping its socket right after tapping cannot abort it.
+- f55eaa2: The price chart is shorter in the FTW app on a phone. It kept the shape the dashboard uses, which is right for a page about prices and wrong for the app's Plan screen, where a sentence, the mode choice and the hour-by-hour timeline share the screen with it: the chart alone painted 247 px of a 375×812 phone, so nothing else was ever on screen with it. It now paints 151 px, and the whole price block has gone from 57 % of the viewport to 45 %. Only the viewBox height moves — the rendered scale comes from the width — so the axis figures, the NOW marker and the peak and low markers come out at exactly the size they did before. `fed` is what tells the app apart from the dashboard, and the dashboard's Energy tab is unchanged at every width.
+
+  Fixed for both: the bottom y-axis figure lost its leading zero on a phone, rendering "0.00 ö" as ".00 ö". Each label is anchored just inside the left gutter and grows leftwards, and the gutter was a fixed 84 units while the phone's axis font is nearly three times the desktop one — so the widest label ran past the edge of the SVG and the browser clipped it. Even "335 ö" lost a hairline. The gutter is now measured from the labels the chart is about to write, which also covers the currencies whose unit is three characters wide.
+
+- fdef0da: The price chart's tooltip now reads the day it is drawing. The chart shows the horizon its toggle selects — today, tomorrow, or both — but the tooltip looked its slot up in every slot the box had sent, so with **Tomorrow** showing, the bar under your finger was tomorrow's and the price beside it was today's. Both days start at midnight, so the clock time printed correctly over the wrong day's number: on a phone, a bar at the top of a 96 öre axis read "9.00 öre". The slots being drawn now travel with the geometry that hit-tests them, since those are the two things that have to agree.
+- c61f42f: The pairing QR can be scanned. The vendored encoder produced symbols no reader could decode above type 6: version information was never written, which the standard requires from type 7, and the timing line was drawn before the alignment patterns, so the centres that sit on row 6 and column 6 were skipped as already taken. Both faults are invisible — the symbol looks like a QR code and decodes as nothing. It stayed hidden because every payload the box had until now was short; the calendar link is a type 4, and the app pairing URL is 165 characters and lands on type 9. The settings tab also called the encoder as if it were a constructor, so it drew nothing at all. Covered by a test that decodes what the encoder produces, rather than counting modules — which is what the previous tests did, and why they passed throughout.
+
 ## 1.16.1
 
 ### Patch Changes
